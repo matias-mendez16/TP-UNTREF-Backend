@@ -9,7 +9,7 @@ import { usuariosRoutes } from './routes/usuarios-routes.js';
 import { lugaresRoutes } from './routes/lugares-routes.js';
 import { disponibilidadRoutes } from './routes/disponibilidad-routes.js';
 import { turnosRoutes } from './routes/turnos-routes.js';
-import { especificacionOpenApi } from './docs/openapi.js';
+import { especificacionSwagger, opcionesSwaggerUi } from './config/swagger.js';
 
 export const app = express();
 
@@ -18,7 +18,7 @@ app.use(helmet());
 app.use(limitadorGlobal);
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(especificacionOpenApi));
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(especificacionSwagger, opcionesSwaggerUi));
 app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/lugares', lugaresRoutes);

@@ -1,547 +1,570 @@
 import { env } from '../config/env.js';
 
-const errorResponse = {
-  description: 'Respuesta de error estándar',
+const respuestaError = (descripcion) => ({
+  description: descripcion,
   content: {
     'application/json': {
       schema: { $ref: '#/components/schemas/Error' },
     },
   },
-};
+});
 
-const validacionResponse = {
-  description: 'Datos inválidos',
+const respuesta = (descripcion, esquema, ejemplo) => ({
+  description: descripcion,
   content: {
     'application/json': {
-      schema: { $ref: '#/components/schemas/Error' },
+      schema: { $ref: `#/components/schemas/${esquema}` },
+      ...(ejemplo ? { example: ejemplo } : {}),
     },
   },
-};
+});
+
+const respuestas = Object.freeze({
+  validacion: respuestaError('Datos de entrada inválidos.'),
+  autenticacion: respuestaError('Credencial de sesión ausente, inválida o vencida.'),
+  autorizacion: respuestaError('El rol autenticado no puede ejecutar esta operación.'),
+  noEncontrado: respuestaError('Recurso no encontrado.'),
+  conflicto: respuestaError('Conflicto con el estado actual del recurso.'),
+  limite: respuestaError('Límite de solicitudes excedido.'),
+  interno: respuestaError('Error interno del servidor.'),
+});
+
+const conRespuestasGlobales = (respuestasOperacion) => ({
+  ...respuestasOperacion,
+  429: respuestas.limite,
+  500: respuestas.interno,
+});
+
+const parametroEntero = (nombre, descripcion) => ({
+  in: 'path',
+  name: nombre,
+  required: true,
+  description: descripcion,
+  schema: { type: 'integer', minimum: 1 },
+});
+
+const parametrosPaginacion = [
+  {
+    in: 'query',
+    name: 'page',
+    required: false,
+    description: 'Número de página, empezando en 1.',
+    schema: { type: 'integer', minimum: 1, default: 1 },
+  },
+  {
+    in: 'query',
+    name: 'limit',
+    required: false,
+    description: 'Cantidad máxima de resultados por página.',
+    schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+  },
+];
+
+const cuerpo = (esquema, ejemplo) => ({
+  required: true,
+  content: {
+    'application/json': {
+      schema: { $ref: `#/components/schemas/${esquema}` },
+      example: ejemplo,
+    },
+  },
+});
+
+const protegida = [{ cookieAuth: [] }];
 
 export const especificacionOpenApi = {
   openapi: '3.0.3',
   info: {
     title: 'Turnero Médico API',
     version: '1.0.0',
-    description: 'API REST del turnero médico con autenticación mediante JWT en cookie HTTPOnly.',
+    description: 'API REST del turnero médico. La sesión se transporta en una cookie HTTPOnly; la identidad, el rol y la propiedad se resuelven siempre en el backend.',
   },
   servers: [{ url: '/' }],
   tags: [
     { name: 'Autenticación', description: 'Registro, inicio y cierre de sesión.' },
     { name: 'Usuarios', description: 'Administración de cuentas según rol.' },
     { name: 'Lugares', description: 'Lugares de atención de los médicos.' },
-    { name: 'Disponibilidad', description: 'Bloques horarios semanales y slots libres.' },
+    { name: 'Disponibilidad', description: 'Bloques horarios semanales y slots calculados.' },
     { name: 'Turnos', description: 'Reserva, consulta y cancelación de turnos.' },
+    { name: 'Documentación', description: 'Interfaz interactiva del contrato REST.' },
   ],
   paths: {
     '/api/auth/register': {
       post: {
         tags: ['Autenticación'],
         summary: 'Registrar paciente',
-        description: 'Crea un usuario con rol paciente. El rol enviado por el cliente se ignora.',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/RegistroPaciente' },
-            },
-          },
-        },
-        responses: {
-          201: {
-            description: 'Paciente creado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaUsuario' },
-              },
-            },
-          },
-          400: validacionResponse,
-          409: errorResponse,
-        },
+        description: 'Operación pública. Crea un usuario con rol `paciente`; cualquier rol enviado por el cliente se ignora y la contraseña se almacena con hash.',
+        requestBody: cuerpo('RegistroPaciente', {
+          nombre: 'Paciente Ejemplo',
+          email: 'paciente@example.com',
+          password: 'Clave123',
+        }),
+        responses: conRespuestasGlobales({
+          201: respuesta('Paciente creado', 'RespuestaUsuario', {
+            success: true,
+            data: { id: 23, nombre: 'Paciente Ejemplo', email: 'paciente@example.com', rol: 'paciente' },
+          }),
+          400: respuestas.validacion,
+          409: respuestas.conflicto,
+        }),
       },
     },
     '/api/auth/login': {
       post: {
         tags: ['Autenticación'],
         summary: 'Iniciar sesión',
-        description: `Emite un JWT en la cookie ${env.cookie.name} con HttpOnly, SameSite y Secure según entorno. El token no se devuelve en el cuerpo.`,
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/Credenciales' },
-            },
-          },
-        },
-        responses: {
+        description: `Operación pública. Verifica credenciales y emite una cookie de sesión HTTPOnly llamada \`${env.cookie.name}\` con SameSite, Path, Max-Age y Secure según entorno. La credencial no se devuelve en el cuerpo.`,
+        requestBody: cuerpo('Credenciales', {
+          email: 'paciente@example.com',
+          password: 'Clave123',
+        }),
+        responses: conRespuestasGlobales({
           200: {
             description: 'Sesión iniciada y cookie emitida',
             headers: {
               'Set-Cookie': {
-                description: 'Cookie de sesión HTTPOnly.',
+                description: 'Cookie de sesión HTTPOnly con los atributos configurados.',
                 schema: { type: 'string' },
               },
             },
             content: {
               'application/json': {
                 schema: { $ref: '#/components/schemas/RespuestaSesion' },
+                example: {
+                  success: true,
+                  data: { id: 23, nombre: 'Paciente Ejemplo', email: 'paciente@example.com', rol: 'paciente' },
+                },
               },
             },
           },
-          400: validacionResponse,
-          401: errorResponse,
-        },
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+        }),
       },
     },
     '/api/auth/logout': {
       post: {
         tags: ['Autenticación'],
         summary: 'Cerrar sesión',
-        description: 'Elimina la cookie de sesión. No revoca criptográficamente un JWT emitido previamente.',
-        responses: {
-          200: {
-            description: 'Cookie eliminada',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaMensaje' },
-              },
-            },
-          },
-        },
+        description: `Operación pública. Elimina la cookie \`${env.cookie.name}\` usando los mismos atributos con que se creó. No revoca criptográficamente una credencial emitida antes de su vencimiento.`,
+        responses: conRespuestasGlobales({
+          200: respuesta('Cookie eliminada', 'RespuestaMensaje', {
+            success: true,
+            message: 'Sesión cerrada.',
+          }),
+        }),
       },
     },
     '/api/usuarios/medicos': {
       post: {
         tags: ['Usuarios'],
         summary: 'Crear médico',
-        description: 'Crea un usuario con rol medico y su perfil profesional en una sola transacción. Solo administradores.',
-        security: [{ cookieAuth: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/AltaMedico' },
-            },
-          },
-        },
-        responses: {
-          201: {
-            description: 'Médico creado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaMedico' },
-                example: {
-                  success: true,
-                  data: {
-                    id: 12,
-                    nombre: 'Dra. Ana Pérez',
-                    email: 'ana@example.com',
-                    rol: 'medico',
-                    medicoId: 4,
-                  },
-                },
-              },
-            },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-          409: errorResponse,
-        },
+        description: 'Solo administradores. Crea el usuario con rol `medico` y su perfil profesional en una sola transacción.',
+        security: protegida,
+        requestBody: cuerpo('AltaMedico', {
+          nombre: 'Dra. Ana Pérez',
+          email: 'ana@example.com',
+          password: 'Clave123',
+          especialidad: 'Clínica General',
+          matricula: 'MAT-1234',
+        }),
+        responses: conRespuestasGlobales({
+          201: respuesta('Médico creado', 'RespuestaMedico', {
+            success: true,
+            data: { id: 12, nombre: 'Dra. Ana Pérez', email: 'ana@example.com', rol: 'medico', medicoId: 4 },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          409: respuestas.conflicto,
+        }),
       },
     },
     '/api/lugares': {
       post: {
         tags: ['Lugares'],
         summary: 'Crear lugar de atención',
-        description: 'Un médico crea lugares solo para su perfil; un admin puede indicar medicoId. El medicoId del body nunca modifica la identidad de un médico autenticado.',
-        security: [{ cookieAuth: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/CrearLugar' },
-            },
-          },
-        },
-        responses: {
-          201: {
-            description: 'Lugar creado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaLugar' },
-              },
-            },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-        },
+        description: 'Médico o administrador. El médico usa su propio perfil; el administrador puede indicar `medicoId`. Un `medicoId` enviado por un médico se ignora.',
+        security: protegida,
+        requestBody: cuerpo('CrearLugar', {
+          nombre: 'Consultorio Centro',
+          direccion: 'Calle 1',
+        }),
+        responses: conRespuestasGlobales({
+          201: respuesta('Lugar creado', 'RespuestaLugar', {
+            success: true,
+            data: { id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+        }),
       },
       get: {
         tags: ['Lugares'],
         summary: 'Listar lugares',
-        description: 'El médico ve solo sus lugares; el admin ve todos. Parámetros page y limit con máximo 100.',
-        security: [{ cookieAuth: [] }],
-        parameters: [
-          { in: 'query', name: 'page', schema: { type: 'integer', minimum: 1, default: 1 } },
-          { in: 'query', name: 'limit', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
-        ],
-        responses: {
-          200: {
-            description: 'Listado paginado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaListaLugares' },
-              },
+        description: 'Médico o administrador. El médico ve solo sus lugares; el administrador ve todos. Orden estable por `id`.',
+        security: protegida,
+        parameters: parametrosPaginacion,
+        responses: conRespuestasGlobales({
+          200: respuesta('Listado paginado', 'RespuestaListaLugares', {
+            success: true,
+            data: {
+              items: [{ id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' }],
+              pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
             },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-        },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+        }),
       },
     },
     '/api/lugares/{id}': {
-      parameters: [
-        { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
-      ],
+      parameters: [parametroEntero('id', 'Identificador del lugar de atención.')],
       get: {
         tags: ['Lugares'],
         summary: 'Detalle de lugar',
         description: 'Solo el médico propietario o un administrador pueden consultarlo.',
-        security: [{ cookieAuth: [] }],
-        responses: {
-          200: {
-            description: 'Lugar encontrado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaLugar' },
-              },
-            },
-          },
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-        },
+        security: protegida,
+        responses: conRespuestasGlobales({
+          200: respuesta('Lugar encontrado', 'RespuestaLugar', {
+            success: true,
+            data: { id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' },
+          }),
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+        }),
       },
       patch: {
         tags: ['Lugares'],
         summary: 'Editar lugar',
-        description: 'Modifica nombre y direccion sin alterar los datos históricos de turnos ya reservados.',
-        security: [{ cookieAuth: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/EditarLugar' },
-            },
-          },
-        },
-        responses: {
-          200: {
-            description: 'Lugar actualizado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaLugar' },
-              },
-            },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-        },
+        description: 'Médico propietario o administrador. Modifica nombre y dirección sin alterar los datos históricos de turnos reservados.',
+        security: protegida,
+        requestBody: cuerpo('EditarLugar', {
+          nombre: 'Consultorio Centro Actualizado',
+          direccion: 'Calle 2',
+        }),
+        responses: conRespuestasGlobales({
+          200: respuesta('Lugar actualizado', 'RespuestaLugar', {
+            success: true,
+            data: { id: 8, medicoId: 4, nombre: 'Consultorio Centro Actualizado', direccion: 'Calle 2' },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+        }),
       },
     },
     '/api/disponibilidad/bloques': {
       post: {
         tags: ['Disponibilidad'],
         summary: 'Crear bloque horario',
-        description: 'Crea una regla semanal recurrente. Requiere horaFin posterior a horaInicio, duracionMinutos divisor exacto y ausencia de solapamiento con otros bloques activos del mismo médico y día, incluso en otro lugar.',
-        security: [{ cookieAuth: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/CrearBloque' },
+        description: 'Médico o administrador. Crea una regla semanal recurrente: `horaFin` debe ser posterior a `horaInicio`, `duracionMinutos` debe dividir exactamente el bloque y no se permiten solapamientos del mismo médico y día, incluso en otro lugar.',
+        security: protegida,
+        requestBody: cuerpo('CrearBloque', {
+          lugarId: 8,
+          diaSemana: 1,
+          horaInicio: '09:00',
+          horaFin: '10:00',
+          duracionMinutos: 30,
+        }),
+        responses: conRespuestasGlobales({
+          201: respuesta('Bloque creado', 'RespuestaBloque', {
+            success: true,
+            data: {
+              id: 15,
+              medicoId: 4,
+              lugarId: 8,
+              diaSemana: 1,
+              horaInicio: '09:00',
+              horaFin: '10:00',
+              duracionMinutos: 30,
+              activo: true,
             },
-          },
-        },
-        responses: {
-          201: {
-            description: 'Bloque creado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaBloque' },
-              },
-            },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-          409: errorResponse,
-        },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+          409: respuestas.conflicto,
+        }),
       },
     },
     '/api/disponibilidad/medicos/{medicoId}': {
       parameters: [
-        { in: 'path', name: 'medicoId', required: true, schema: { type: 'integer' } },
-        { in: 'query', name: 'fecha', required: false, schema: { type: 'string', format: 'date' } },
+        parametroEntero('medicoId', 'Identificador del perfil médico.'),
+        {
+          in: 'query',
+          name: 'fecha',
+          required: false,
+          description: 'Fecha concreta en formato `YYYY-MM-DD`. Si se envía, filtra por `diaSemana` y calcula slots libres u ocupados.',
+          schema: { type: 'string', format: 'date' },
+        },
       ],
       get: {
         tags: ['Disponibilidad'],
         summary: 'Consultar disponibilidad de un médico',
-        description: 'Devuelve lugares y bloques activos. Con fecha, filtra por diaSemana y calcula slots con disponible en true o false. Fecha y hora se interpretan en America/Argentina/Buenos_Aires.',
-        security: [{ cookieAuth: [] }],
-        responses: {
-          200: {
-            description: 'Disponibilidad del médico',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaDisponibilidad' },
-                example: {
-                  success: true,
-                  data: {
-                    medicoId: 4,
-                    fecha: '2030-06-03',
-                    lugares: [{ id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' }],
-                    bloques: [{
-                      id: 15,
-                      medicoId: 4,
-                      lugarId: 8,
-                      diaSemana: 1,
-                      horaInicio: '09:00',
-                      horaFin: '10:00',
-                      duracionMinutos: 30,
-                      activo: true,
-                      slots: [
-                        { horaInicio: '09:00', horaFin: '09:30', disponible: false },
-                        { horaInicio: '09:30', horaFin: '10:00', disponible: true },
-                      ],
-                    }],
-                  },
-                },
-              },
+        description: 'Paciente, médico o administrador autenticados. Devuelve lugares y bloques activos; con `fecha`, agrega slots calculados y marca `disponible` en `true` o `false`. La zona horaria de referencia es `America/Argentina/Buenos_Aires`.',
+        security: protegida,
+        responses: conRespuestasGlobales({
+          200: respuesta('Disponibilidad del médico', 'RespuestaDisponibilidad', {
+            success: true,
+            data: {
+              medicoId: 4,
+              fecha: '2030-06-03',
+              lugares: [{ id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' }],
+              bloques: [{
+                id: 15,
+                medicoId: 4,
+                lugarId: 8,
+                diaSemana: 1,
+                horaInicio: '09:00',
+                horaFin: '10:00',
+                duracionMinutos: 30,
+                activo: true,
+                slots: [
+                  { horaInicio: '09:00', horaFin: '09:30', disponible: false },
+                  { horaInicio: '09:30', horaFin: '10:00', disponible: true },
+                ],
+              }],
             },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          404: errorResponse,
-        },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+        }),
       },
     },
     '/api/disponibilidad/bloques/{bloqueId}': {
-      parameters: [
-        { in: 'path', name: 'bloqueId', required: true, schema: { type: 'integer' } },
-      ],
+      parameters: [parametroEntero('bloqueId', 'Identificador del bloque de disponibilidad.')],
       patch: {
         tags: ['Disponibilidad'],
         summary: 'Editar bloque',
-        description: 'Solo el médico propietario o un admin. Se rechaza con 409 si existe un turno reservado vinculado al bloque.',
-        security: [{ cookieAuth: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/EditarBloque' },
+        description: 'Solo el médico propietario o un administrador. Se rechaza con `409` si el bloque tiene turnos en estado `reservado`.',
+        security: protegida,
+        requestBody: cuerpo('EditarBloque', {
+          lugarId: 8,
+          diaSemana: 1,
+          horaInicio: '09:30',
+          horaFin: '11:00',
+          duracionMinutos: 30,
+        }),
+        responses: conRespuestasGlobales({
+          200: respuesta('Bloque actualizado', 'RespuestaBloque', {
+            success: true,
+            data: {
+              id: 15,
+              medicoId: 4,
+              lugarId: 8,
+              diaSemana: 1,
+              horaInicio: '09:30',
+              horaFin: '11:00',
+              duracionMinutos: 30,
+              activo: true,
             },
-          },
-        },
-        responses: {
-          200: {
-            description: 'Bloque actualizado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaBloque' },
-              },
-            },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-          409: errorResponse,
-        },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+          409: respuestas.conflicto,
+        }),
       },
       delete: {
         tags: ['Disponibilidad'],
         summary: 'Desactivar bloque',
-        description: 'No elimina físicamente el bloque: setea activo=false para conservar el historial. Se rechaza con 409 si existe un turno reservado.',
-        security: [{ cookieAuth: [] }],
-        responses: {
-          200: {
-            description: 'Bloque desactivado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaBloque' },
-              },
+        description: 'Médico propietario o administrador. Hace desactivación lógica con `activo = false` para conservar el historial. Se rechaza con `409` si existen turnos reservados vinculados.',
+        security: protegida,
+        responses: conRespuestasGlobales({
+          200: respuesta('Bloque desactivado', 'RespuestaBloque', {
+            success: true,
+            data: {
+              id: 15,
+              medicoId: 4,
+              lugarId: 8,
+              diaSemana: 1,
+              horaInicio: '09:30',
+              horaFin: '11:00',
+              duracionMinutos: 30,
+              activo: false,
             },
-          },
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-          409: errorResponse,
-        },
+          }),
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+          409: respuestas.conflicto,
+        }),
       },
     },
     '/api/turnos': {
       post: {
         tags: ['Turnos'],
         summary: 'Reservar turno',
-        description: 'Solo pacientes. Valida bloque activo, día, slot y lugar dentro de una transacción. `slotActivoKey` se genera en el backend y la restricción UNIQUE de MySQL traduce colisiones a 409. Los campos `pacienteId` y `slotActivoKey` enviados por el cliente se ignoran.',
-        security: [{ cookieAuth: [] }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/CrearTurno' },
-              example: {
-                medicoId: 4,
-                bloqueId: 15,
-                lugarId: 8,
-                fecha: '2030-06-03',
-                horaInicio: '09:00',
-              },
+        description: 'Solo pacientes. Valida dentro de una transacción que el bloque esté activo, que la fecha corresponda a su día, que la hora sea un slot generado por su duración y que el lugar pertenezca al médico y al bloque. `pacienteId` y `slotActivoKey` enviados por el cliente se ignoran; una colisión de reserva activa responde `409`.',
+        security: protegida,
+        requestBody: cuerpo('CrearTurno', {
+          medicoId: 4,
+          bloqueId: 15,
+          lugarId: 8,
+          fecha: '2030-06-03',
+          horaInicio: '09:30',
+        }),
+        responses: conRespuestasGlobales({
+          201: respuesta('Turno reservado', 'RespuestaTurno', {
+            success: true,
+            data: {
+              id: 101,
+              medicoId: 4,
+              pacienteId: 23,
+              bloqueId: 15,
+              lugarId: 8,
+              fecha: '2030-06-03',
+              horaInicio: '09:30',
+              horaFin: '10:00',
+              estado: 'reservado',
+              canceladoPorRol: null,
+              canceladoEn: null,
+              slotActivoKey: '4_2030-06-03_09:30',
             },
-          },
-        },
-        responses: {
-          201: {
-            description: 'Turno reservado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaTurno' },
-                example: {
-                  success: true,
-                  data: {
-                    id: 101,
-                    medicoId: 4,
-                    pacienteId: 23,
-                    bloqueId: 15,
-                    lugarId: 8,
-                    fecha: '2030-06-03',
-                    horaInicio: '09:00',
-                    horaFin: '09:30',
-                    estado: 'reservado',
-                    canceladoPorRol: null,
-                    canceladoEn: null,
-                    slotActivoKey: '4_2030-06-03_09:00',
-                    medico: { id: 4, especialidad: 'Clínica General', matricula: 'MAT-1234' },
-                    paciente: { id: 23, nombre: 'Paciente Ejemplo', email: 'paciente@example.com' },
-                    lugar: { id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' },
-                  },
-                },
-              },
-            },
-          },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-          409: errorResponse,
-        },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+          409: respuestas.conflicto,
+        }),
       },
       get: {
         tags: ['Turnos'],
         summary: 'Listar turnos',
-        description: 'El paciente ve solo sus turnos, el médico solo los asignados a su perfil y el admin ve todos. Los filtros nunca amplían el alcance del rol; si intentan hacerlo se responde 403.',
-        security: [{ cookieAuth: [] }],
+        description: 'Paciente, médico o administrador autenticados. El paciente ve solo sus turnos, el médico solo los asignados a su perfil y el administrador ve todos. Los filtros nunca amplían el alcance del rol; intentar hacerlo responde `403`. Orden estable por `fecha`, `horaInicio` e `id`.',
+        security: protegida,
         parameters: [
-          { in: 'query', name: 'fecha', required: false, schema: { type: 'string', format: 'date' } },
-          { in: 'query', name: 'estado', required: false, schema: { type: 'string', enum: ['reservado', 'cancelado'] } },
-          { in: 'query', name: 'medicoId', required: false, schema: { type: 'integer', minimum: 1 } },
-          { in: 'query', name: 'pacienteId', required: false, schema: { type: 'integer', minimum: 1 } },
-          { in: 'query', name: 'page', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
-          { in: 'query', name: 'limit', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
-        ],
-        responses: {
-          200: {
-            description: 'Listado paginado con visibilidad según rol',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaListaTurnos' },
-                examples: {
-                  Paciente: {
-                    summary: 'Paciente: solo sus turnos',
-                    value: { success: true, data: { items: [{ id: 101, pacienteId: 23, medicoId: 4, estado: 'reservado' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } } },
-                  },
-                  Medico: {
-                    summary: 'Médico: su agenda con datos del paciente',
-                    value: { success: true, data: { items: [{ id: 101, medicoId: 4, paciente: { id: 23, nombre: 'Paciente Ejemplo', email: 'paciente@example.com' }, fecha: '2030-06-03', horaInicio: '09:00' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } } },
-                  },
-                  Admin: {
-                    summary: 'Administrador: todos los turnos',
-                    value: { success: true, data: { items: [{ id: 101, medicoId: 4, pacienteId: 23, estado: 'reservado' }, { id: 102, medicoId: 5, pacienteId: 24, estado: 'cancelado' }], pagination: { page: 1, limit: 20, total: 2, totalPages: 1 } } },
-                  },
-                },
-              },
-            },
+          {
+            in: 'query',
+            name: 'fecha',
+            required: false,
+            description: 'Filtrar por fecha concreta en formato `YYYY-MM-DD`.',
+            schema: { type: 'string', format: 'date' },
           },
-          400: validacionResponse,
-          401: errorResponse,
-          403: errorResponse,
-        },
+          {
+            in: 'query',
+            name: 'estado',
+            required: false,
+            description: 'Filtrar por estado del turno.',
+            schema: { type: 'string', enum: ['reservado', 'cancelado'] },
+          },
+          {
+            in: 'query',
+            name: 'medicoId',
+            required: false,
+            description: 'Filtrar por médico; los roles no administradores solo pueden usar su propio identificador.',
+            schema: { type: 'integer', minimum: 1 },
+          },
+          {
+            in: 'query',
+            name: 'pacienteId',
+            required: false,
+            description: 'Filtrar por paciente; los pacientes solo pueden usar su propio identificador.',
+            schema: { type: 'integer', minimum: 1 },
+          },
+          ...parametrosPaginacion,
+        ],
+        responses: conRespuestasGlobales({
+          200: respuesta('Listado paginado según rol', 'RespuestaListaTurnos', {
+            success: true,
+            data: {
+              items: [{
+                id: 101,
+                medicoId: 4,
+                pacienteId: 23,
+                fecha: '2030-06-03',
+                horaInicio: '09:30',
+                estado: 'reservado',
+              }],
+              pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+            },
+          }),
+          400: respuestas.validacion,
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+        }),
       },
     },
     '/api/turnos/{id}': {
-      parameters: [
-        { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
-      ],
+      parameters: [parametroEntero('id', 'Identificador del turno.')],
       get: {
         tags: ['Turnos'],
         summary: 'Detalle de turno',
-        description: 'Solo el paciente propietario, el médico asignado o un administrador. Un turno ajeno responde 403 sin datos; uno inexistente responde 404.',
-        security: [{ cookieAuth: [] }],
-        responses: {
-          200: {
-            description: 'Turno encontrado',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaTurno' },
-              },
+        description: 'Solo el paciente propietario, el médico asignado o un administrador. Un turno ajeno responde `403` sin datos; uno inexistente responde `404`. La respuesta no incluye hashes, credenciales ni secretos.',
+        security: protegida,
+        responses: conRespuestasGlobales({
+          200: respuesta('Turno encontrado', 'RespuestaTurno', {
+            success: true,
+            data: {
+              id: 101,
+              medicoId: 4,
+              pacienteId: 23,
+              bloqueId: 15,
+              lugarId: 8,
+              fecha: '2030-06-03',
+              horaInicio: '09:30',
+              horaFin: '10:00',
+              estado: 'reservado',
+              slotActivoKey: '4_2030-06-03_09:30',
             },
-          },
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-        },
+          }),
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+        }),
       },
     },
     '/api/turnos/{id}/cancelar': {
-      parameters: [
-        { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
-      ],
+      parameters: [parametroEntero('id', 'Identificador del turno a cancelar.')],
       patch: {
         tags: ['Turnos'],
         summary: 'Cancelar turno',
-        description: 'Paciente propietario, médico asignado o administrador. Solo opera sobre turnos reservado: en una transacción fija estado cancelado, deja slotActivoKey en NULL y registra canceladoPorRol y canceladoEn. El horario queda libre de inmediato y la fila histórica se conserva.',
-        security: [{ cookieAuth: [] }],
-        responses: {
+        description: 'Paciente propietario, médico asignado o administrador. Solo opera sobre turnos `reservado`: en una transacción fija `cancelado`, deja `slotActivoKey` en `NULL` y registra `canceladoPorRol` y `canceladoEn`. El horario queda libre de inmediato y la fila histórica se conserva.',
+        security: protegida,
+        responses: conRespuestasGlobales({
+          200: respuesta('Turno cancelado y slot liberado', 'RespuestaTurno', {
+            success: true,
+            data: {
+              id: 101,
+              estado: 'cancelado',
+              canceladoPorRol: 'paciente',
+              canceladoEn: '2030-05-20T14:35:00.000Z',
+              slotActivoKey: null,
+            },
+          }),
+          401: respuestas.autenticacion,
+          403: respuestas.autorizacion,
+          404: respuestas.noEncontrado,
+          409: respuestas.conflicto,
+        }),
+      },
+    },
+    '/api-docs': {
+      get: {
+        tags: ['Documentación'],
+        summary: 'Documentación interactiva',
+        description: 'Operación pública que sirve la interfaz Swagger UI con el contrato completo de la API. No exige cookie de sesión.',
+        responses: conRespuestasGlobales({
           200: {
-            description: 'Turno cancelado y slot liberado',
+            description: 'Interfaz HTML de documentación',
             content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RespuestaTurno' },
-                example: {
-                  success: true,
-                  data: {
-                    id: 101,
-                    estado: 'cancelado',
-                    canceladoPorRol: 'paciente',
-                    canceladoEn: '2030-05-20T14:35:00.000Z',
-                    slotActivoKey: null,
-                  },
-                },
+              'text/html': {
+                schema: { type: 'string' },
               },
             },
           },
-          401: errorResponse,
-          403: errorResponse,
-          404: errorResponse,
-          409: errorResponse,
-        },
+        }),
       },
     },
   },
@@ -551,6 +574,7 @@ export const especificacionOpenApi = {
         type: 'apiKey',
         in: 'cookie',
         name: env.cookie.name,
+        description: 'Cookie de sesión HTTPOnly configurada en el entorno. La identidad y el rol se obtienen del servidor, no del cliente.',
       },
     },
     schemas: {
@@ -560,7 +584,7 @@ export const especificacionOpenApi = {
         properties: {
           nombre: { type: 'string', maxLength: 120 },
           email: { type: 'string', format: 'email' },
-          password: { type: 'string', minLength: 8, maxLength: 72 },
+          password: { type: 'string', minLength: 8, maxLength: 72, description: 'Valor ficticio de ejemplo; reemplazar por una contraseña real.' },
         },
       },
       Credenciales: {
@@ -568,7 +592,7 @@ export const especificacionOpenApi = {
         required: ['email', 'password'],
         properties: {
           email: { type: 'string', format: 'email' },
-          password: { type: 'string' },
+          password: { type: 'string', description: 'Valor ficticio de ejemplo; reemplazar por una contraseña real.' },
         },
       },
       UsuarioPublico: {
@@ -601,7 +625,7 @@ export const especificacionOpenApi = {
         properties: {
           nombre: { type: 'string', maxLength: 120 },
           email: { type: 'string', format: 'email' },
-          password: { type: 'string', minLength: 8, maxLength: 72 },
+          password: { type: 'string', minLength: 8, maxLength: 72, description: 'Valor ficticio de ejemplo; reemplazar por una contraseña real.' },
           especialidad: { type: 'string', maxLength: 150 },
           matricula: { type: 'string', maxLength: 60 },
         },
@@ -634,7 +658,7 @@ export const especificacionOpenApi = {
         type: 'object',
         required: ['nombre', 'direccion'],
         properties: {
-          medicoId: { type: 'integer', description: 'Obligatorio para admin; ignorado para médico.' },
+          medicoId: { type: 'integer', description: 'Obligatorio para administrador; ignorado para médico.' },
           nombre: { type: 'string', maxLength: 150 },
           direccion: { type: 'string', maxLength: 255 },
         },
@@ -668,7 +692,7 @@ export const especificacionOpenApi = {
         type: 'object',
         required: ['lugarId', 'diaSemana', 'horaInicio', 'horaFin', 'duracionMinutos'],
         properties: {
-          medicoId: { type: 'integer', description: 'Obligatorio para admin; ignorado para médico.' },
+          medicoId: { type: 'integer', description: 'Obligatorio para administrador; ignorado para médico.' },
           lugarId: { type: 'integer' },
           diaSemana: { type: 'integer', minimum: 0, maximum: 6 },
           horaInicio: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
@@ -773,7 +797,7 @@ export const especificacionOpenApi = {
           lugarId: { type: 'integer', minimum: 1 },
           fecha: { type: 'string', format: 'date' },
           horaInicio: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
-          pacienteId: { type: 'integer', description: 'Ignorado: la identidad surge del JWT.' },
+          pacienteId: { type: 'integer', description: 'Ignorado: la identidad surge de la sesión.' },
           slotActivoKey: { type: 'string', description: 'Ignorado: la clave se genera en el backend.' },
         },
       },
