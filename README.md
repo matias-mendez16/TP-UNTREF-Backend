@@ -1,4 +1,4 @@
-<!-- # Turnero Médico — API REST
+# Turnero Médico — API REST
 
 **Diplomatura en Programación Backend · UNTREF - Sede Guaminí**
 
@@ -42,61 +42,82 @@ npm install
 
 ### 3.2. Configurar las variables de entorno
 
-Crear el archivo .env a partir de la plantilla .env.example:
+Copiar la plantilla y completar los valores del entorno local:
 
-bash
+```bash
 cp .env.example .env
+```
 
+Editar `.env` con las credenciales correspondientes. Las variables obligatorias son:
 
-Editar el archivo .env con las credenciales correspondientes al entorno local:
-
-env
+```env
 PORT=3000
 NODE_ENV=development
+LOG_LEVEL=info
 
 DB_HOST=localhost
 DB_PORT=3306
-DB_NAME=turnero_medico
+DB_DATABASE=turnero_medico
 DB_USER=root
-DB_PASSWORD=tu_password_mysql
+DB_PASSWORD=
 
 JWT_SECRET=reemplaza_por_una_clave_secreta_segura
-JWT_EXPIRES_IN=1d
+JWT_EXPIRES_IN=1h
+
 COOKIE_NAME=token
+COOKIE_SAME_SITE=lax
+COOKIE_MAX_AGE_MS=3600000
+COOKIE_SECURE=false
+COOKIE_PATH=/
 
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX=100
+AUTH_RATE_LIMIT_MAX=20
+```
 
-Importante: No compartir ni subir el archivo .env al repositorio. Las credenciales y claves secretas deben mantenerse privadas.
+El nombre de la base se configura con `DB_DATABASE` (no `DB_NAME`). No compartir ni subir `.env` al repositorio.
 
-### 3.3. Crear la base de datos en MySQL
+### 3.3. Crear la base de datos en MySQL 8
 
-Ejecutar el siguiente comando:
-
-bash
+```bash
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS turnero_medico CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+```
 
+La base debe usar MySQL 8 o superior para soportar las restricciones `CHECK` y el índice `UNIQUE` declarados en `migrations/001_crear_esquema_turnero.sql`.
 
-Esto crea la base de datos turnero_medico utilizando codificación UTF-8 compatible con caracteres especiales.
+### 3.4. Ejecutar las migraciones
 
-### 3.4. Ejecutar el servidor
+```bash
+npm run migrate
+```
+
+El migrador ESM lee los archivos `.sql` ordenados desde `migrations/`, registra cada aplicación en la tabla `migrations_aplicadas` y omite las ya ejecutadas. La primera ejecución crea `usuarios`, `medicos`, `lugares_atencion`, `bloques_disponibilidad`, `turnos`, sus índices, claves foráneas y restricciones. Una segunda ejecución no duplica estructura.
+
+`slotActivoKey` es una columna `VARCHAR(120)`, única y nullable. Para un turno `reservado` vale `<medicoId>_<fecha>_<horaInicio>` (por ejemplo, `7_2026-12-01_09:30`, con `horaInicio` normalizada a `HH:mm`); para un turno `cancelado` vale `NULL`. Así MySQL impide dos reservas activas del mismo slot pero permite conservar el historial y reutilizar el horario después de una cancelación. El backend genera este valor; el cliente nunca lo controla.
+
+### 3.5. Ejecutar el servidor
 
 Modo desarrollo (con recarga automática):
 
-bash
+```bash
 npm run dev
-
+```
 
 Modo producción:
 
-bash
+```bash
 npm start
+```
 
+Una vez iniciado:
 
-Una vez iniciado, el servidor estará disponible en:
-
+```text
 API REST: http://localhost:3000
 Documentación Swagger: http://localhost:3000/api-docs
+```
 ## 4. Estructura del Proyecto
-text
+
+```text
 turnero-medico/
 │
 ├── AGENTS.md                 # Reglas y convenciones para OpenCode / SDD
@@ -128,6 +149,7 @@ turnero-medico/
 ├── package.json              # Dependencias y configuración ESM
 │
 └── README.md                 # Documentación principal
+```
 
 ## 5. Modelo de Datos y Reglas de Negocio
 ### 5.1. Entidades principales
@@ -276,10 +298,11 @@ Esta separación permite mantener un código organizado, reutilizable y escalabl
 
 Se utiliza el sistema de módulos nativo de JavaScript mediante import y export, configurando el proyecto con:
 
-json
+```json
 {
   "type": "module"
 }
+```
 
 
 Ventajas:
@@ -318,8 +341,9 @@ Middleware global de manejo de errores.
 
 El middleware global utiliza la firma de cuatro parámetros de Express:
 
-javascript
+```javascript
 (err, req, res, next)
+```
 
 
 Su responsabilidad es traducir los distintos errores de la aplicación a respuestas JSON uniformes.
@@ -421,5 +445,5 @@ La implementación combina una arquitectura backend por capas, persistencia rela
 
 Proyecto académico — Diplomatura en Programación Backend
 
-Universidad Nacional de Tres de Febrero (UNTREF) — Sede Guaminí -->
+Universidad Nacional de Tres de Febrero (UNTREF) — Sede Guaminí
 
