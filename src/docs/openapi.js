@@ -31,6 +31,7 @@ export const especificacionOpenApi = {
     { name: 'Usuarios', description: 'Administración de cuentas según rol.' },
     { name: 'Lugares', description: 'Lugares de atención de los médicos.' },
     { name: 'Disponibilidad', description: 'Bloques horarios semanales y slots libres.' },
+    { name: 'Turnos', description: 'Reserva, consulta y cancelación de turnos.' },
   ],
   paths: {
     '/api/auth/register': {
@@ -385,6 +386,164 @@ export const especificacionOpenApi = {
         },
       },
     },
+    '/api/turnos': {
+      post: {
+        tags: ['Turnos'],
+        summary: 'Reservar turno',
+        description: 'Solo pacientes. Valida bloque activo, día, slot y lugar dentro de una transacción. `slotActivoKey` se genera en el backend y la restricción UNIQUE de MySQL traduce colisiones a 409. Los campos `pacienteId` y `slotActivoKey` enviados por el cliente se ignoran.',
+        security: [{ cookieAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/CrearTurno' },
+              example: {
+                medicoId: 4,
+                bloqueId: 15,
+                lugarId: 8,
+                fecha: '2030-06-03',
+                horaInicio: '09:00',
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: 'Turno reservado',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RespuestaTurno' },
+                example: {
+                  success: true,
+                  data: {
+                    id: 101,
+                    medicoId: 4,
+                    pacienteId: 23,
+                    bloqueId: 15,
+                    lugarId: 8,
+                    fecha: '2030-06-03',
+                    horaInicio: '09:00',
+                    horaFin: '09:30',
+                    estado: 'reservado',
+                    canceladoPorRol: null,
+                    canceladoEn: null,
+                    slotActivoKey: '4_2030-06-03_09:00',
+                    medico: { id: 4, especialidad: 'Clínica General', matricula: 'MAT-1234' },
+                    paciente: { id: 23, nombre: 'Paciente Ejemplo', email: 'paciente@example.com' },
+                    lugar: { id: 8, medicoId: 4, nombre: 'Consultorio Centro', direccion: 'Calle 1' },
+                  },
+                },
+              },
+            },
+          },
+          400: validacionResponse,
+          401: errorResponse,
+          403: errorResponse,
+          404: errorResponse,
+          409: errorResponse,
+        },
+      },
+      get: {
+        tags: ['Turnos'],
+        summary: 'Listar turnos',
+        description: 'El paciente ve solo sus turnos, el médico solo los asignados a su perfil y el admin ve todos. Los filtros nunca amplían el alcance del rol; si intentan hacerlo se responde 403.',
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { in: 'query', name: 'fecha', required: false, schema: { type: 'string', format: 'date' } },
+          { in: 'query', name: 'estado', required: false, schema: { type: 'string', enum: ['reservado', 'cancelado'] } },
+          { in: 'query', name: 'medicoId', required: false, schema: { type: 'integer', minimum: 1 } },
+          { in: 'query', name: 'pacienteId', required: false, schema: { type: 'integer', minimum: 1 } },
+          { in: 'query', name: 'page', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+          { in: 'query', name: 'limit', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+        ],
+        responses: {
+          200: {
+            description: 'Listado paginado con visibilidad según rol',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RespuestaListaTurnos' },
+                examples: {
+                  Paciente: {
+                    summary: 'Paciente: solo sus turnos',
+                    value: { success: true, data: { items: [{ id: 101, pacienteId: 23, medicoId: 4, estado: 'reservado' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } } },
+                  },
+                  Medico: {
+                    summary: 'Médico: su agenda con datos del paciente',
+                    value: { success: true, data: { items: [{ id: 101, medicoId: 4, paciente: { id: 23, nombre: 'Paciente Ejemplo', email: 'paciente@example.com' }, fecha: '2030-06-03', horaInicio: '09:00' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } } },
+                  },
+                  Admin: {
+                    summary: 'Administrador: todos los turnos',
+                    value: { success: true, data: { items: [{ id: 101, medicoId: 4, pacienteId: 23, estado: 'reservado' }, { id: 102, medicoId: 5, pacienteId: 24, estado: 'cancelado' }], pagination: { page: 1, limit: 20, total: 2, totalPages: 1 } } },
+                  },
+                },
+              },
+            },
+          },
+          400: validacionResponse,
+          401: errorResponse,
+          403: errorResponse,
+        },
+      },
+    },
+    '/api/turnos/{id}': {
+      parameters: [
+        { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
+      ],
+      get: {
+        tags: ['Turnos'],
+        summary: 'Detalle de turno',
+        description: 'Solo el paciente propietario, el médico asignado o un administrador. Un turno ajeno responde 403 sin datos; uno inexistente responde 404.',
+        security: [{ cookieAuth: [] }],
+        responses: {
+          200: {
+            description: 'Turno encontrado',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RespuestaTurno' },
+              },
+            },
+          },
+          401: errorResponse,
+          403: errorResponse,
+          404: errorResponse,
+        },
+      },
+    },
+    '/api/turnos/{id}/cancelar': {
+      parameters: [
+        { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
+      ],
+      patch: {
+        tags: ['Turnos'],
+        summary: 'Cancelar turno',
+        description: 'Paciente propietario, médico asignado o administrador. Solo opera sobre turnos reservado: en una transacción fija estado cancelado, deja slotActivoKey en NULL y registra canceladoPorRol y canceladoEn. El horario queda libre de inmediato y la fila histórica se conserva.',
+        security: [{ cookieAuth: [] }],
+        responses: {
+          200: {
+            description: 'Turno cancelado y slot liberado',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RespuestaTurno' },
+                example: {
+                  success: true,
+                  data: {
+                    id: 101,
+                    estado: 'cancelado',
+                    canceladoPorRol: 'paciente',
+                    canceladoEn: '2030-05-20T14:35:00.000Z',
+                    slotActivoKey: null,
+                  },
+                },
+              },
+            },
+          },
+          401: errorResponse,
+          403: errorResponse,
+          404: errorResponse,
+          409: errorResponse,
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -603,6 +762,73 @@ export const especificacionOpenApi = {
         properties: {
           success: { type: 'boolean' },
           data: { $ref: '#/components/schemas/Disponibilidad' },
+        },
+      },
+      CrearTurno: {
+        type: 'object',
+        required: ['medicoId', 'bloqueId', 'lugarId', 'fecha', 'horaInicio'],
+        properties: {
+          medicoId: { type: 'integer', minimum: 1 },
+          bloqueId: { type: 'integer', minimum: 1 },
+          lugarId: { type: 'integer', minimum: 1 },
+          fecha: { type: 'string', format: 'date' },
+          horaInicio: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
+          pacienteId: { type: 'integer', description: 'Ignorado: la identidad surge del JWT.' },
+          slotActivoKey: { type: 'string', description: 'Ignorado: la clave se genera en el backend.' },
+        },
+      },
+      Turno: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          medicoId: { type: 'integer' },
+          pacienteId: { type: 'integer' },
+          bloqueId: { type: 'integer' },
+          lugarId: { type: 'integer' },
+          fecha: { type: 'string', format: 'date' },
+          horaInicio: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
+          horaFin: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
+          estado: { type: 'string', enum: ['reservado', 'cancelado'] },
+          canceladoPorRol: { type: 'string', enum: ['paciente', 'medico', 'admin'], nullable: true },
+          canceladoEn: { type: 'string', format: 'date-time', nullable: true },
+          slotActivoKey: { type: 'string', nullable: true, description: 'NULL cuando el turno está cancelado.' },
+          createdAt: { type: 'string', format: 'date-time', nullable: true },
+          updatedAt: { type: 'string', format: 'date-time', nullable: true },
+          medico: {
+            type: 'object',
+            nullable: true,
+            properties: {
+              id: { type: 'integer' },
+              especialidad: { type: 'string' },
+              matricula: { type: 'string' },
+              usuario: { $ref: '#/components/schemas/UsuarioPublico' },
+            },
+          },
+          paciente: { $ref: '#/components/schemas/UsuarioPublico' },
+          lugar: { $ref: '#/components/schemas/LugarAtencion' },
+        },
+      },
+      RespuestaTurno: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: { $ref: '#/components/schemas/Turno' },
+        },
+      },
+      RespuestaListaTurnos: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: {
+            type: 'object',
+            properties: {
+              items: {
+                type: 'array',
+                items: { $ref: '#/components/schemas/Turno' },
+              },
+              pagination: { $ref: '#/components/schemas/Paginacion' },
+            },
+          },
         },
       },
       Error: {

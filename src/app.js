@@ -8,6 +8,7 @@ import { authRoutes } from './routes/auth-routes.js';
 import { usuariosRoutes } from './routes/usuarios-routes.js';
 import { lugaresRoutes } from './routes/lugares-routes.js';
 import { disponibilidadRoutes } from './routes/disponibilidad-routes.js';
+import { turnosRoutes } from './routes/turnos-routes.js';
 import { especificacionOpenApi } from './docs/openapi.js';
 
 export const app = express();
@@ -22,5 +23,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/lugares', lugaresRoutes);
 app.use('/api/disponibilidad', disponibilidadRoutes);
+app.use('/api/turnos', turnosRoutes);
 app.use(middleware404);
 app.use(manejadorErrores);

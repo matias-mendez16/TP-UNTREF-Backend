@@ -294,18 +294,15 @@ GET	/api/lugares	Médico / Admin	Listado paginado; acepta ?page=1&limit=20 con l
 GET	/api/lugares/:id	Dueño / Admin	Detalle del lugar.
 PATCH	/api/lugares/:id	Dueño / Admin	Edición de nombre y direccion sin alterar turnos históricos.
 ### 6.5. Gestión de turnos
-Método	Endpoint	Acceso	Descripción
-POST	/api/turnos	Paciente	Reserva de turno mediante transacción e índice único.
-GET	/api/turnos	Autenticado	Listado de turnos con filtros mediante req.query.
-GET	/api/turnos/:id	Dueño / Admin	Consulta del detalle de un turno mediante req.params.id.
-PATCH	/api/turnos/:id/cancelar	Dueño / Admin	Cancelación del turno y liberación inmediata del horario.
+Método	Endpoint	Acceso	Códigos	Descripción
+POST	/api/turnos	Paciente	201 / 400 / 401 / 403 / 404 / 409	Reserva transaccional; `slotActivoKey` se genera en el backend y el índice único responde 409 ante doble reserva.
+GET	/api/turnos	Paciente / Médico / Admin	200 / 400 / 401 / 403	Listado paginado con filtros mediante req.query y alcance fijo por rol.
+GET	/api/turnos/:id	Paciente propietario / Médico asignado / Admin	200 / 401 / 403 / 404	Detalle del turno mediante req.params.id; un turno ajeno responde 403 sin datos.
+PATCH	/api/turnos/:id/cancelar	Paciente propietario / Médico asignado / Admin	200 / 401 / 403 / 404 / 409	Cancelación lógica, liberación inmediata del slot y conservación del historial.
 
-Los filtros disponibles para consultar turnos incluyen:
+Los filtros disponibles para `GET /api/turnos` son `fecha` (`YYYY-MM-DD`), `estado` (`reservado` o `cancelado`), `medicoId`, `pacienteId`, `page` y `limit`. Los valores por defecto son `page=1` y `limit=20`, con `limit` máximo 100. El orden es estable por `fecha`, `horaInicio` e `id`.
 
-fecha
-estado
-medicoId
-pacienteId
+El alcance se aplica antes que los filtros: el paciente ve solo sus turnos, el médico solo los asignados a su perfil y el admin ve todos. Un filtro que intente ampliar ese alcance se rechaza con 403.
 ### 6.6. Documentación
 Método	Endpoint	Acceso	Descripción
 GET	/api-docs	Público / Desarrollo	Documentación interactiva de la API mediante Swagger UI.
@@ -371,6 +368,38 @@ Consulta de disponibilidad para una fecha concreta:
 ```bash
 curl -i -b medico-cookies.txt "http://localhost:3000/api/disponibilidad/medicos/4?fecha=2030-06-03"
 ```
+
+Reserva de un turno con la cookie del paciente. El `pacienteId` se toma del JWT, por lo que no debe enviarse en el body:
+
+```bash
+curl -i -c paciente-cookies.txt -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"paciente@example.com","password":"Clave123"}'
+
+curl -i -b paciente-cookies.txt -X POST http://localhost:3000/api/turnos \
+  -H "Content-Type: application/json" \
+  -d '{"medicoId":4,"bloqueId":15,"lugarId":8,"fecha":"2030-06-03","horaInicio":"09:00"}'
+```
+
+Consulta de turnos por rol, con filtros y paginación:
+
+```bash
+curl -i -b paciente-cookies.txt "http://localhost:3000/api/turnos?fecha=2030-06-03&estado=reservado&page=1&limit=20"
+
+curl -i -b medico-cookies.txt "http://localhost:3000/api/turnos?fecha=2030-06-03&page=1&limit=20"
+
+curl -i -b admin-cookies.txt "http://localhost:3000/api/turnos?medicoId=4&estado=cancelado&page=1&limit=20"
+```
+
+Detalle y cancelación del turno:
+
+```bash
+curl -i -b paciente-cookies.txt "http://localhost:3000/api/turnos/101"
+
+curl -i -b paciente-cookies.txt -X PATCH http://localhost:3000/api/turnos/101/cancelar
+```
+
+Después de la cancelación, `slotActivoKey` queda en `NULL`, el turno conserva su historial y el mismo horario puede reservarse nuevamente. Si dos pacientes reservan el mismo slot en simultáneo, una respuesta es `201` y la otra `409 Conflict`.
 
 Las respuestas de autenticación no incluyen `passwordHash`, tokens ni secretos. El JWT viaja solo en la cookie; el cliente no debe enviar `id`, `rol` ni `medicoId` para identificarse.
 
