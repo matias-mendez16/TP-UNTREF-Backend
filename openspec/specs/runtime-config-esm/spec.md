@@ -34,6 +34,11 @@ El código base MUST organizarse en las carpetas `config`, `middlewares`, `route
 - **WHEN** se revisa el contenido inicial de `src/routes`, `src/controllers` y `src/services`
 - **THEN** no existen endpoints ni reglas de negocio de turnos, disponibilidad ni autenticación
 
+#### Scenario: Separación con endpoints de autenticación presentes
+
+- **WHEN** se revisan `src/routes`, `src/controllers` y `src/services` después de incorporar el módulo de autenticación
+- **THEN** las rutas solo declaran endpoints y middlewares, los controladores orquestan solicitudes y respuestas, y las reglas de negocio y consultas permanecen en servicios
+
 ### Requirement: Configuración exclusivamente desde entorno
 
 El servidor MUST tomar toda configuración sensible y operativa de variables de entorno cargadas desde `.env` (o del entorno del proceso en producción). El código fuente MUST NOT contener credenciales, secretos ni valores operativos hardcodeados.

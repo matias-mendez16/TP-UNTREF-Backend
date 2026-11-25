@@ -77,6 +77,8 @@ AUTH_RATE_LIMIT_MAX=20
 
 El nombre de la base se configura con `DB_DATABASE` (no `DB_NAME`). No compartir ni subir `.env` al repositorio.
 
+`JWT_SECRET` y `JWT_EXPIRES_IN` controlan la firma y la expiración del token; el payload incluye `id`, `rol` y `medicoId`, resuelto siempre en el backend. `COOKIE_NAME`, `COOKIE_SAME_SITE`, `COOKIE_MAX_AGE_MS`, `COOKIE_SECURE` y `COOKIE_PATH` configuran la cookie de sesión. En producción se usa `COOKIE_SECURE=true`, que puede forzarse también en desarrollo. `AUTH_RATE_LIMIT_MAX` debe ser menor que `RATE_LIMIT_MAX` y aplica solo a `/api/auth`.
+
 ### 3.3. Crear la base de datos en MySQL 8
 
 ```bash
@@ -95,7 +97,17 @@ El migrador ESM lee los archivos `.sql` ordenados desde `migrations/`, registra 
 
 `slotActivoKey` es una columna `VARCHAR(120)`, única y nullable. Para un turno `reservado` vale `<medicoId>_<fecha>_<horaInicio>` (por ejemplo, `7_2026-12-01_09:30`, con `horaInicio` normalizada a `HH:mm`); para un turno `cancelado` vale `NULL`. Así MySQL impide dos reservas activas del mismo slot pero permite conservar el historial y reutilizar el horario después de una cancelación. El backend genera este valor; el cliente nunca lo controla.
 
-### 3.5. Ejecutar el servidor
+### 3.5. Crear el administrador inicial
+
+No existe un endpoint público para crear administradores. El primer usuario con rol `admin` se genera con una operación controlada desde el entorno local o del despliegue:
+
+```bash
+ADMIN_NOMBRE="Administrador" ADMIN_EMAIL="admin@example.com" ADMIN_PASSWORD="Clave123" node src/scripts/crear-admin.js
+```
+
+Las variables `ADMIN_NOMBRE`, `ADMIN_EMAIL` y `ADMIN_PASSWORD` son opcionales para el servidor y solo las usa este script. La contraseña debe cumplir la política de 8 a 72 caracteres, con al menos una letra y un dígito. Si el email ya existe con otro rol, el script rechaza la operación; si ya es administrador, no duplica la cuenta.
+
+### 3.6. Ejecutar el servidor
 
 Modo desarrollo (con recarga automática):
 
@@ -255,7 +267,7 @@ El horario queda disponible nuevamente para futuras reservas.
 Método	Endpoint	Acceso	Descripción
 POST	/api/auth/register	Público	Registro de usuario con rol paciente.
 POST	/api/auth/login	Público	Inicio de sesión y emisión de JWT en cookie HTTPOnly.
-POST	/api/auth/logout	Autenticado	Cierre de sesión y limpieza de cookie.
+POST	/api/auth/logout	Público	Cierre de sesión y limpieza de cookie con atributos coincidentes.
 ### 6.2. Gestión de usuarios
 Método	Endpoint	Acceso	Descripción
 POST	/api/usuarios/medicos	Admin	Alta de médico y creación de su perfil profesional.
@@ -280,6 +292,41 @@ medicoId
 ### 6.5. Documentación
 Método	Endpoint	Acceso	Descripción
 GET	/api-docs	Público / Desarrollo	Documentación interactiva de la API mediante Swagger UI.
+
+### 6.6. Ejemplos de uso
+
+Registro de paciente:
+
+```bash
+curl -i -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Paciente Ejemplo","email":"paciente@example.com","password":"Clave123"}'
+```
+
+Inicio de sesión y guardado de la cookie HTTPOnly:
+
+```bash
+curl -i -c cookies.txt -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"paciente@example.com","password":"Clave123"}'
+```
+
+Cierre de sesión:
+
+```bash
+curl -i -b cookies.txt -X POST http://localhost:3000/api/auth/logout
+```
+
+Alta de médico con un administrador previamente autenticado:
+
+```bash
+curl -i -b admin-cookies.txt -X POST http://localhost:3000/api/usuarios/medicos \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Dra. Ana Pérez","email":"ana@example.com","password":"Clave123","especialidad":"Clínica General","matricula":"MAT-1234"}'
+```
+
+Las respuestas de autenticación no incluyen `passwordHash`, tokens ni secretos. El JWT viaja solo en la cookie; el cliente no debe enviar `id`, `rol` ni `medicoId` para identificarse.
+
 ## 7. Arquitectura y Decisiones Técnicas
 ### 7.1. Separación por capas
 
@@ -313,11 +360,13 @@ Mejora la organización y reutilización de componentes.
 Permite alinearse con el ecosistema actual de Node.js.
 ### 7.3. Autenticación mediante JWT y cookies HTTPOnly
 
-La autenticación utiliza JSON Web Tokens (JWT) almacenados en cookies con la propiedad HTTPOnly.
+La autenticación utiliza JSON Web Tokens (JWT) almacenados en cookies con `HttpOnly`, `SameSite`, `Path`, `Max-Age` y `Secure` según el entorno. El middleware valida firma y expiración en cada solicitud protegida y expone la identidad resultante en `req.user = { id, rol, medicoId }`.
 
-A diferencia de localStorage, estas cookies no pueden ser leídas directamente mediante JavaScript ejecutado en el navegador, lo que reduce el riesgo de robo del token ante ataques XSS.
+El payload se genera solo en el backend con `id`, `rol` y `medicoId`; este último se resuelve desde el perfil `Medico` cuando corresponde. Los datos de identidad enviados en body, query o params nunca sustituyen a la sesión.
 
-Además, se deben configurar adecuadamente las propiedades Secure y SameSite según el entorno de ejecución.
+A diferencia de localStorage, una cookie `HttpOnly` no puede ser leída directamente por JavaScript del navegador, lo que reduce el riesgo ante XSS. `SameSite=Lax` o `Strict` y `Secure` en producción son la mitigación CSRF adoptada para este esquema de autenticación basado en cookies.
+
+`POST /api/auth/logout` elimina la cookie con los mismos atributos usados al crearla. No revoca criptográficamente un JWT emitido previamente: si la cookie copiada se reutiliza antes de su expiración, el token seguiría siendo válido. Por eso la caducidad se mantiene acotada con `JWT_EXPIRES_IN` y `COOKIE_MAX_AGE_MS`.
 
 ### 7.4. Prevención de reservas duplicadas
 
