@@ -6,6 +6,8 @@ import { limitadorGlobal } from './middlewares/rate-limit.js';
 import { middleware404, manejadorErrores } from './middlewares/error-handler.js';
 import { authRoutes } from './routes/auth-routes.js';
 import { usuariosRoutes } from './routes/usuarios-routes.js';
+import { lugaresRoutes } from './routes/lugares-routes.js';
+import { disponibilidadRoutes } from './routes/disponibilidad-routes.js';
 import { especificacionOpenApi } from './docs/openapi.js';
 
 export const app = express();
@@ -18,5 +20,7 @@ app.use(cookieParser());
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(especificacionOpenApi));
 app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
+app.use('/api/lugares', lugaresRoutes);
+app.use('/api/disponibilidad', disponibilidadRoutes);
 app.use(middleware404);
 app.use(manejadorErrores);

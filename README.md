@@ -233,6 +233,16 @@ Validación de bloques horarios
 La hora de finalización debe ser posterior a la hora de inicio.
 La duración de los turnos debe dividir exactamente el bloque horario disponible.
 No se permiten solapamientos horarios para un mismo médico, incluso cuando corresponden a distintos lugares de atención.
+Los bloques son reglas semanales recurrentes: diaSemana va de 0 (domingo) a 6 (sábado) y la fecha concreta se entrega en la consulta de disponibilidad o en la reserva.
+Los slots no se almacenan por adelantado: se calculan al consultar disponibilidad con horaInicio, horaFin y duracionMinutos del bloque.
+Sin el parámetro fecha, la consulta devuelve lugares y bloques activos; con fecha, además filtra por diaSemana e incluye cada slot con disponible en true o false.
+No se devuelven como reservables las fechas pasadas ni los horarios que ya comenzaron.
+Fechas y horarios
+Las fechas se reciben en formato YYYY-MM-DD y los horarios en formato HH:mm.
+La zona horaria de referencia es America/Argentina/Buenos_Aires; el servidor no depende de la zona horaria local del sistema.
+Propiedad de lugares y bloques
+Un médico solo puede crear, consultar y editar lugares y bloques de su propio perfil.
+Un administrador puede operar sobre los lugares y bloques de cualquier médico; el médicoId enviado en el body nunca cambia la identidad obtenida del JWT.
 Bloqueo ante turnos activos
 
 No se permite editar ni eliminar un bloque de disponibilidad cuando existen turnos en estado reservado asociados a él.
@@ -273,11 +283,17 @@ Método	Endpoint	Acceso	Descripción
 POST	/api/usuarios/medicos	Admin	Alta de médico y creación de su perfil profesional.
 ### 6.3. Disponibilidad horaria
 Método	Endpoint	Acceso	Descripción
-POST	/api/disponibilidad/bloques	Médico / Admin	Alta de bloque horario y lugar de atención.
-GET	/api/disponibilidad/medicos/:medicoId	Autenticado	Consulta lugares, bloques y horarios disponibles.
+POST	/api/disponibilidad/bloques	Médico / Admin	Alta de regla semanal con lugar existente.
+GET	/api/disponibilidad/medicos/:medicoId	Autenticado	Consulta lugares, bloques activos y slots calculados; acepta ?fecha=YYYY-MM-DD.
 PATCH	/api/disponibilidad/bloques/:bloqueId	Médico dueño / Admin	Edición de bloque, si no tiene turnos reservados.
-DELETE	/api/disponibilidad/bloques/:bloqueId	Médico dueño / Admin	Eliminación de bloque, si no tiene turnos reservados.
-### 6.4. Gestión de turnos
+DELETE	/api/disponibilidad/bloques/:bloqueId	Médico dueño / Admin	Desactivación lógica del bloque, si no tiene turnos reservados.
+### 6.4. Lugares de atención
+Método	Endpoint	Acceso	Descripción
+POST	/api/lugares	Médico / Admin	Alta de lugar; el médico usa su propio perfil y el admin puede indicar medicoId.
+GET	/api/lugares	Médico / Admin	Listado paginado; acepta ?page=1&limit=20 con limit máximo 100.
+GET	/api/lugares/:id	Dueño / Admin	Detalle del lugar.
+PATCH	/api/lugares/:id	Dueño / Admin	Edición de nombre y direccion sin alterar turnos históricos.
+### 6.5. Gestión de turnos
 Método	Endpoint	Acceso	Descripción
 POST	/api/turnos	Paciente	Reserva de turno mediante transacción e índice único.
 GET	/api/turnos	Autenticado	Listado de turnos con filtros mediante req.query.
@@ -289,11 +305,12 @@ Los filtros disponibles para consultar turnos incluyen:
 fecha
 estado
 medicoId
-### 6.5. Documentación
+pacienteId
+### 6.6. Documentación
 Método	Endpoint	Acceso	Descripción
 GET	/api-docs	Público / Desarrollo	Documentación interactiva de la API mediante Swagger UI.
 
-### 6.6. Ejemplos de uso
+### 6.7. Ejemplos de uso
 
 Registro de paciente:
 
@@ -323,6 +340,36 @@ Alta de médico con un administrador previamente autenticado:
 curl -i -b admin-cookies.txt -X POST http://localhost:3000/api/usuarios/medicos \
   -H "Content-Type: application/json" \
   -d '{"nombre":"Dra. Ana Pérez","email":"ana@example.com","password":"Clave123","especialidad":"Clínica General","matricula":"MAT-1234"}'
+```
+
+Inicio de sesión del médico, necesario para los ejemplos siguientes de lugares y disponibilidad:
+
+```bash
+curl -i -c medico-cookies.txt -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ana@example.com","password":"Clave123"}'
+```
+
+Alta de lugar con un médico autenticado:
+
+```bash
+curl -i -b medico-cookies.txt -X POST http://localhost:3000/api/lugares \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Consultorio Centro","direccion":"Calle 1"}'
+```
+
+Alta de bloque semanal con el lugar recién creado (`diaSemana` 1 equivale a lunes):
+
+```bash
+curl -i -b medico-cookies.txt -X POST http://localhost:3000/api/disponibilidad/bloques \
+  -H "Content-Type: application/json" \
+  -d '{"lugarId":8,"diaSemana":1,"horaInicio":"09:00","horaFin":"10:00","duracionMinutos":30}'
+```
+
+Consulta de disponibilidad para una fecha concreta:
+
+```bash
+curl -i -b medico-cookies.txt "http://localhost:3000/api/disponibilidad/medicos/4?fecha=2030-06-03"
 ```
 
 Las respuestas de autenticación no incluyen `passwordHash`, tokens ni secretos. El JWT viaja solo en la cookie; el cliente no debe enviar `id`, `rol` ni `medicoId` para identificarse.
